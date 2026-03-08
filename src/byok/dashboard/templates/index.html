@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1020;
+      --panel: #121933;
+      --panel-2: #0f1530;
+      --text: #e6ecff;
+      --muted: #99a4d1;
+      --accent: #7aa2ff;
+      --border: #24305e;
+      --success: #2ecc71;
+      --warn: #f1c40f;
+      --error: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, Segoe UI, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      height: 100vh;
+    }
+    .sidebar, .detail {
+      padding: 16px;
+      overflow: auto;
+    }
+    .sidebar {
+      border-right: 1px solid var(--border);
+      background: var(--panel-2);
+    }
+    .detail {
+      background: var(--bg);
+    }
+    .card, .entry {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+    .card {
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .entry {
+      padding: 12px;
+      margin-bottom: 10px;
+      cursor: pointer;
+    }
+    .entry.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent) inset;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+    .grow { flex: 1; }
+    input, button, select, textarea {
+      font: inherit;
+      color: var(--text);
+      background: #0a1125;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+    button {
+      cursor: pointer;
+      background: #162246;
+    }
+    button:hover {
+      background: #1c2d5e;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .ok { color: var(--success); }
+    .warn { color: var(--warn); }
+    .err { color: var(--error); }
+    .muted { color: var(--muted); }
+    h1, h2, h3 {
+      margin: 0 0 10px;
+    }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #09101f;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      overflow: auto;
+    }
+    .section {
+      margin-bottom: 16px;
+    }
+    .empty {
+      padding: 20px;
+      color: var(--muted);
+      text-align: center;
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+    }
+    .kv {
+      display: grid;
+      grid-template-columns: 160px 1fr;
+      gap: 8px 12px;
+      margin-bottom: 12px;
+    }
+    .kv div:nth-child(odd) {
+      color: var(--muted);
+    }
+    @media (max-width: 1000px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="card">
+        <h1>{{ title }}</h1>
+        <div class="row">
+          <input id="apiKey" class="grow" placeholder="RELAY_API_KEY">
+          <button id="saveKey">Save</button>
+        </div>
+        <div class="row">
+          <button id="refresh">Refresh</button>
+          <button id="clearLogs">Clear Logs</button>
+          <span id="status" class="muted"></span>
+        </div>
+      </div>
+      <div id="logList"></div>
+    </aside>
+    <main class="detail">
+      <div id="detailView" class="empty">Select a log entry to view request and response details.</div>
+    </main>
+  </div>
+  <script>
+    const apiKeyInput = document.getElementById('apiKey');
+    const logList = document.getElementById('logList');
+    const detailView = document.getElementById('detailView');
+    const statusNode = document.getElementById('status');
+    let logs = [];
+    let activeId = null;
+
+    apiKeyInput.value = localStorage.getItem('byokRelayApiKey') || '';
+
+    function authHeaders() {
+      const apiKey = apiKeyInput.value.trim();
+      const headers = {};
+      if (apiKey) {
+        headers['Authorization'] = 'Bearer ' + apiKey;
+      }
+      return headers;
+    }
+
+    function saveKey() {
+      localStorage.setItem('byokRelayApiKey', apiKeyInput.value.trim());
+      setStatus('API key saved.');
+    }
+
+    function setStatus(text) {
+      statusNode.textContent = text;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+    }
+
+    function pretty(value) {
+      if (value === null || value === undefined || value === '') {
+        return '';
+      }
+      if (typeof value === 'string') {
+        try {
+          return JSON.stringify(JSON.parse(value), null, 2);
+        } catch {
+          return value;
+        }
+      }
+      return JSON.stringify(value, null, 2);
+    }
+
+    function renderList() {
+      if (!logs.length) {
+        logList.innerHTML = '<div class="empty">No logs yet.</div>';
+        return;
+      }
+
+      logList.innerHTML = logs.map((log) => {
+        const statusClass = log.response_status >= 500 ? 'err' : log.response_status >= 400 ? 'warn' : 'ok';
+        const activeClass = log.id === activeId ? 'active' : '';
+        return `
+          <div class="entry ${activeClass}" data-id="${log.id}">
+            <div class="row">
+              <strong>${escapeHtml(log.method)}</strong>
+              <span class="pill">${escapeHtml(log.path)}</span>
+            </div>
+            <div class="row">
+              <span class="pill">${escapeHtml(log.route_mode || '-')}</span>
+              <span class="pill ${statusClass}">${escapeHtml(log.response_status ?? '-')}</span>
+              <span class="pill">${escapeHtml((log.duration_ms ?? '-') + ' ms')}</span>
+            </div>
+            <div class="muted">${escapeHtml(log.started_at)}</div>
+          </div>
+        `;
+      }).join('');
+
+      Array.from(document.querySelectorAll('.entry')).forEach((node) => {
+        node.addEventListener('click', () => {
+          activeId = node.dataset.id;
+          renderList();
+          renderDetail();
+        });
+      });
+    }
+
+    function renderDetail() {
+      const log = logs.find((item) => item.id === activeId);
+      if (!log) {
+        detailView.innerHTML = '<div class="empty">Select a log entry to view request and response details.</div>';
+        return;
+      }
+
+      detailView.innerHTML = `
+        <div class="section">
+          <h2>${escapeHtml(log.method)} ${escapeHtml(log.path)}</h2>
+          <div class="kv">
+            <div>Started</div><div>${escapeHtml(log.started_at)}</div>
+            <div>Duration</div><div>${escapeHtml(String(log.duration_ms ?? '-'))} ms</div>
+            <div>Route mode</div><div>${escapeHtml(log.route_mode || '-')}</div>
+            <div>Target path</div><div>${escapeHtml(log.target_path || '-')}</div>
+            <div>Status</div><div>${escapeHtml(String(log.response_status ?? '-'))}</div>
+          </div>
+        </div>
+        <div class="section">
+          <h3>Request Headers</h3>
+          <pre>${escapeHtml(pretty(log.request_headers))}</pre>
+        </div>
+        <div class="section">
+          <h3>Original Request Body</h3>
+          <pre>${escapeHtml(pretty(log.request_body))}</pre>
+        </div>
+        <div class="section">
+          <h3>Forwarded Request Body</h3>
+          <pre>${escapeHtml(pretty(log.forwarded_request_body))}</pre>
+        </div>
+        <div class="section">
+          <h3>Response Headers</h3>
+          <pre>${escapeHtml(pretty(log.response_headers))}</pre>
+        </div>
+        <div class="section">
+          <h3>Response Body</h3>
+          <pre>${escapeHtml(pretty(log.response_body))}</pre>
+        </div>
+        <div class="section">
+          <h3>Streaming Preview</h3>
+          <pre>${escapeHtml(log.stream_preview || '')}</pre>
+        </div>
+      `;
+    }
+
+    async function refreshLogs() {
+      setStatus('Loading...');
+      try {
+        const resp = await fetch('/api/logs', { headers: authHeaders() });
+        if (!resp.ok) {
+          throw new Error('HTTP ' + resp.status);
+        }
+        const payload = await resp.json();
+        logs = payload.logs || [];
+        if (!activeId && logs.length) {
+          activeId = logs[0].id;
+        }
+        if (activeId && !logs.some((item) => item.id === activeId)) {
+          activeId = logs.length ? logs[0].id : null;
+        }
+        renderList();
+        renderDetail();
+        setStatus('Updated at ' + new Date().toLocaleTimeString());
+      } catch (error) {
+        setStatus('Failed: ' + error.message);
+      }
+    }
+
+    async function clearLogs() {
+      try {
+        const resp = await fetch('/api/logs', {
+          method: 'DELETE',
+          headers: authHeaders(),
+        });
+        if (!resp.ok) {
+          throw new Error('HTTP ' + resp.status);
+        }
+        logs = [];
+        activeId = null;
+        renderList();
+        renderDetail();
+        setStatus('Logs cleared.');
+      } catch (error) {
+        setStatus('Clear failed: ' + error.message);
+      }
+    }
+
+    document.getElementById('saveKey').addEventListener('click', saveKey);
+    document.getElementById('refresh').addEventListener('click', refreshLogs);
+    document.getElementById('clearLogs').addEventListener('click', clearLogs);
+    refreshLogs();
+    setInterval(refreshLogs, 5000);
+  </script>
+</body>
+</html>
