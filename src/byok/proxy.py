@@ -40,8 +40,38 @@ HOP_BY_HOP_HEADERS = {
 REQUEST_LOGS = []
 
 
+def resolve_upstream_url(route_mode: str) -> str:
+    endpoint = config.UPSTREAM_BASE_URL.rstrip("/")
+    if not endpoint:
+        raise ValueError("UPSTREAM_BASE_URL is empty")
+
+    responses_marker = "/responses"
+    chat_marker = "/chat/completions"
+
+    if route_mode == "responses-compat":
+        if endpoint.endswith(responses_marker):
+            return endpoint
+        if endpoint.endswith(chat_marker):
+            return endpoint[: -len(chat_marker)] + responses_marker
+    else:
+        if endpoint.endswith(chat_marker):
+            return endpoint
+        if endpoint.endswith(responses_marker):
+            return endpoint[: -len(responses_marker)] + chat_marker
+
+    raise ValueError("UPSTREAM_BASE_URL must end with /chat/completions or /responses")
+
+
 def filter_headers(headers) -> dict:
     return {k: v for k, v in headers.items() if k.lower() not in HOP_BY_HOP_HEADERS}
+
+
+def strip_auth_headers(headers: dict) -> dict:
+    return {
+        k: v
+        for k, v in headers.items()
+        if k.lower() not in ("authorization", "x-api-key")
+    }
 
 
 def extract_api_key(request: Request) -> str:
@@ -160,12 +190,58 @@ async def _handle_proxy(app: FastAPI, full_path: str, request: Request):
             payload = sanitize_responses_payload(payload)
             body = json.dumps(payload).encode("utf-8")
 
-    base_url = config.UPSTREAM_BASE_URL.rstrip("/")
     headers = dict(filter_headers(request.headers))
     if config.UPSTREAM_API_KEY:
-        headers["Authorization"] = "Bearer {}".format(config.UPSTREAM_API_KEY)
+        headers = strip_auth_headers(headers)
+        if config.UPSTREAM_API_KEY_HEADER in ("authorization", "bearer"):
+            headers["Authorization"] = "Bearer {}".format(config.UPSTREAM_API_KEY)
+        elif config.UPSTREAM_API_KEY_HEADER == "x-api-key":
+            headers["x-api-key"] = config.UPSTREAM_API_KEY
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": {
+                        "message": "UPSTREAM_API_KEY_HEADER must be 'authorization' or 'x-api-key'",
+                        "type": "config_error",
+                    }
+                },
+            )
 
-    upstream_url = "{base}{path}".format(base=base_url, path=target_path)
+    try:
+        upstream_url = resolve_upstream_url(route_mode)
+    except ValueError as exc:
+        log_entry = {
+            "id": str(uuid.uuid4()),
+            "method": request.method,
+            "path": incoming_path,
+            "target_path": target_path,
+            "route_mode": route_mode,
+            "upstream_mode": "direct",
+            "request_headers": sanitize_headers_for_log(dict(request.headers)),
+            "request_body": truncate_text(
+                decode_body(original_body), config.LOG_BODY_LIMIT
+            ),
+            "forwarded_request_body": truncate_text(
+                decode_body(body), config.LOG_BODY_LIMIT
+            ),
+            "status_code": 500,
+            "response_status": 500,
+            "error": str(exc),
+            "started_at": now_iso(),
+            "started_at_ts": time.time(),
+        }
+        finalize_log(log_entry)
+        store_log(log_entry)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "message": str(exc),
+                    "type": "config_error",
+                }
+            },
+        )
 
     log_entry = {
         "id": str(uuid.uuid4()),

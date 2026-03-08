@@ -34,6 +34,9 @@ PORT = _get_int("PORT", 8082)
 # Upstream (OpenAI-compatible API)
 UPSTREAM_BASE_URL = os.getenv("UPSTREAM_BASE_URL", "").rstrip("/")
 UPSTREAM_API_KEY = os.getenv("UPSTREAM_API_KEY", "")
+UPSTREAM_API_KEY_HEADER = (
+    os.getenv("UPSTREAM_API_KEY_HEADER", "authorization").strip().lower()
+)
 
 # Relay auth
 RELAY_API_KEY = os.getenv("RELAY_API_KEY", "")

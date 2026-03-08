@@ -41,10 +41,19 @@ python run.py
 Edit `.env` before starting:
 
 ```env
-UPSTREAM_BASE_URL=https://api.openai.com/v1
+UPSTREAM_BASE_URL=https://api.openai.com/v1/responses
 UPSTREAM_API_KEY=sk-your-upstream-api-key
+UPSTREAM_API_KEY_HEADER=authorization
 RELAY_API_KEY=change-me-to-a-long-random-string
 ```
+
+`UPSTREAM_BASE_URL` is now a full endpoint URL, and `/v1/responses` is the recommended default.
+If you set `/chat/completions`, the relay will map it to `/responses` when needed.
+
+`UPSTREAM_API_KEY_HEADER` supports two modes:
+
+- `authorization` (default): sends `Authorization: Bearer <UPSTREAM_API_KEY>`
+- `x-api-key`: sends `x-api-key: <UPSTREAM_API_KEY>`
 
 Default addresses:
 
@@ -60,7 +69,7 @@ In Cursor BYOK:
 
 1. Cursor sends a request to `/v1/chat/completions`
 2. This project listens on that endpoint
-3. If the body looks like a Responses API payload, it forwards the request to `UPSTREAM_BASE_URL/v1/responses`
+3. If the body looks like a Responses API payload, it forwards to `UPSTREAM_BASE_URL` (default `/v1/responses`)
 4. When the upstream returns a Responses API result, this project converts it into Chat Completions format
 5. The converted response is returned to Cursor
 

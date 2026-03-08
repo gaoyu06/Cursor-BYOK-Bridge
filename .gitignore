@@ -31,3 +31,6 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Local deploy scripts
+deploy/
